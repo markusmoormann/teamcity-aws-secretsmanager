@@ -1,4 +1,4 @@
-# AWS Secrets Manager Support for TeamCity
+# AWS Secrets Manager for TeamCity
 
 Use secrets stored in **AWS Secrets Manager** as TeamCity build parameters. You don't need to copy them into
 password parameters or fetch them with scripts.

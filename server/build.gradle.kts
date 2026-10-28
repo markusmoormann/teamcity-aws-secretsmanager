@@ -30,10 +30,11 @@ teamcity {
     server {
         descriptor {
             name = "aws-secretsmanager"
-            displayName = "AWS Secrets Manager Support"
+            displayName = "AWS Secrets Manager"
             description = "Provides AWS Secrets Manager secrets as TeamCity remote parameters, resolved on the build agent via TeamCity AWS Connections."
             version = project.version.toString()
             vendorName = "Markus Moormann"
+            vendorUrl = "https://github.com/markusmoormann"
             useSeparateClassloader = true
             nodeResponsibilitiesAware = true
         }
