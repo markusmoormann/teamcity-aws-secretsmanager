@@ -1,0 +1,9 @@
+AWS Secrets Manager Support for TeamCity
+Copyright 2026 Markus Moormann
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The plugin distribution bundles third-party libraries, among them the AWS SDK for Java 2.x
+(Copyright Amazon.com, Inc. or its affiliates), Jackson (FasterXML) and the Kotlin standard library
+(JetBrains s.r.o.). Their licenses and notices are included in the "licenses" directory of the
+plugin distribution.
