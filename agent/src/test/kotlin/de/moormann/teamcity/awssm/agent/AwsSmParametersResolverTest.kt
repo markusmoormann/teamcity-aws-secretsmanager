@@ -50,9 +50,12 @@ class AwsSmParametersResolverTest {
         )
     }
 
+    private fun resolve(resolver: AwsSmParametersResolver, parameters: List<AwsSmParameter>): Boolean =
+        resolver.resolveParameters(build, parameters, resolver.takeAllCredentials(build))
+
     @Test
     fun `resolves and masks parameters`() {
-        val ok = resolver.resolveParameters(build, listOf(
+        val ok = resolve(resolver, listOf(
             AwsSmParameter("env.DB_USER", "AwsProd", AwsSmQuery.parse("prod/db!/user")),
             AwsSmParameter("system.db.password", "AwsProd", AwsSmQuery.parse("prod/db!/password")),
             AwsSmParameter("apiToken", "AwsProd", AwsSmQuery.parse("api-token"))
@@ -63,7 +66,7 @@ class AwsSmParametersResolverTest {
         verify { build.addSharedSystemProperty("db.password", "s3cr3t") }
         verify { build.addSharedConfigParameter("apiToken", "plain-token") }
 
-        listOf("admin", "s3cr3t", "plain-token", "secretKey", "sessionToken").forEach {
+        listOf("admin", "s3cr3t", "plain-token", "secretKey", "sessionToken", credentials.encode()).forEach {
             verify { passwordReplacer.addPassword(it) }
         }
         // credentials are removed from the build parameters
@@ -89,14 +92,14 @@ class AwsSmParametersResolverTest {
             SecretsManagerFetcher { SecretValue("value", null) }
         }
 
-        assertTrue(resolver.resolveParameters(build, listOf(AwsSmParameter("token", "AwsProd", AwsSmQuery.parse(arn)))))
+        assertTrue(resolve(resolver, listOf(AwsSmParameter("token", "AwsProd", AwsSmQuery.parse(arn)))))
         assertEquals(listOf("us-west-2"), regions)
         verify { logger.message("token <- $arn [us-west-2]") }
     }
 
     @Test
     fun `stops build if secret is missing`() {
-        val ok = resolver.resolveParameters(build, listOf(
+        val ok = resolve(resolver, listOf(
             AwsSmParameter("env.MISSING", "AwsProd", AwsSmQuery.parse("missing!/x"))
         ))
 
@@ -106,7 +109,7 @@ class AwsSmParametersResolverTest {
 
     @Test
     fun `stops build if key is missing`() {
-        val ok = resolver.resolveParameters(build, listOf(
+        val ok = resolve(resolver, listOf(
             AwsSmParameter("env.X", "AwsProd", AwsSmQuery.parse("prod/db!/nope"))
         ))
 
@@ -116,12 +119,45 @@ class AwsSmParametersResolverTest {
 
     @Test
     fun `stops build if server provided no credentials`() {
-        val ok = resolver.resolveParameters(build, listOf(
+        val ok = resolve(resolver, listOf(
             AwsSmParameter("env.X", "OtherConnection", AwsSmQuery.parse("prod/db"))
         ))
 
         assertFalse(ok)
         assertTrue(fetchCalls.isEmpty())
         verify { build.stopBuild(match { it.contains("OtherConnection") }) }
+    }
+
+    @Test
+    fun `masks and clears credentials of all connections even if an earlier one fails`() {
+        val other = AwsSmCredentials("AKIAOTHER0000000", "otherSecretKey", null, "us-east-1")
+        every { build.sharedConfigParameters } returns mapOf(
+            AwsSmConstants.credentialsParameterName("AwsProd") to credentials.encode(),
+            AwsSmConstants.credentialsParameterName("AwsOther") to other.encode()
+        )
+
+        val ok = resolve(resolver, listOf(
+            AwsSmParameter("env.MISSING", "AwsProd", AwsSmQuery.parse("missing")),
+            AwsSmParameter("env.OTHER", "AwsOther", AwsSmQuery.parse("api-token"))
+        ))
+
+        assertFalse(ok)
+        listOf(credentials.encode(), other.encode(), "secretKey", "sessionToken", "otherSecretKey").forEach {
+            verify { passwordReplacer.addPassword(it) }
+        }
+        verify { build.addSharedConfigParameter(AwsSmConstants.credentialsParameterName("AwsProd"), "") }
+        verify { build.addSharedConfigParameter(AwsSmConstants.credentialsParameterName("AwsOther"), "") }
+    }
+
+    @Test
+    fun `masks and clears undecodable credentials`() {
+        every { build.sharedConfigParameters } returns mapOf(AwsSmConstants.credentialsParameterName("Broken") to "bm90LWpzb24=")
+
+        val ok = resolve(resolver, listOf(AwsSmParameter("env.X", "Broken", AwsSmQuery.parse("prod/db"))))
+
+        assertFalse(ok)
+        verify { passwordReplacer.addPassword("bm90LWpzb24=") }
+        verify { build.addSharedConfigParameter(AwsSmConstants.credentialsParameterName("Broken"), "") }
+        verify { build.stopBuild(match { it.contains("Failed to decode AWS credentials") }) }
     }
 }

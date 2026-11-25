@@ -20,40 +20,60 @@ class AwsSmParametersResolver(
     constructor() : this({ credentials, region -> AwsSdkSecretsManagerFetcher(credentials, region) })
 
     /**
+     * Removes the credentials of all AWS connections from the shared build parameters and masks them in the build log.
+     * Must be called at the very start of the build, before any parsing or AWS calls, so that no early exit can
+     * leave credentials in the build parameters (and thus in internal build artifacts).
+     *
+     * @return the Base64-encoded credentials by connection id
+     */
+    fun takeAllCredentials(build: AgentRunningBuild): Map<String, String> {
+        val encodedByParameter = build.sharedConfigParameters
+            .filterKeys { it.startsWith(AwsSmConstants.CREDENTIALS_PARAMETER_PREFIX) }
+            .filterValues { it.isNotBlank() }
+        if (encodedByParameter.isEmpty()) return emptyMap()
+
+        val passwordReplacer = build.passwordReplacer
+        // First mask the complete encoded values, nothing can fail in between
+        encodedByParameter.values.forEach { passwordReplacer.addPassword(it) }
+        // Then clear them, they are only needed here and must not be exposed to build steps
+        encodedByParameter.keys.forEach { build.addSharedConfigParameter(it, "") }
+        // Also mask the decoded secrets; decoding errors are reported when the connection is used
+        encodedByParameter.values.forEach { encoded ->
+            runCatching { AwsSmCredentials.decode(encoded) }.getOrNull()?.let { credentials ->
+                if (credentials.secretAccessKey.isNotEmpty()) passwordReplacer.addPassword(credentials.secretAccessKey)
+                credentials.sessionToken?.takeIf { it.isNotEmpty() }?.let { passwordReplacer.addPassword(it) }
+            }
+        }
+        return encodedByParameter.mapKeys { it.key.removePrefix(AwsSmConstants.CREDENTIALS_PARAMETER_PREFIX) }
+    }
+
+    /**
      * Fetches the secrets and sets them as (masked) build parameters.
      * On failure a build problem is reported and the build is stopped.
      *
+     * @param encodedCredentials the result of [takeAllCredentials]
      * @return true if all parameters were resolved
      */
-    fun resolveParameters(build: AgentRunningBuild, parameters: List<AwsSmParameter>): Boolean {
+    fun resolveParameters(build: AgentRunningBuild, parameters: List<AwsSmParameter>, encodedCredentials: Map<String, String>): Boolean {
         var secretCount = 0
         for ((connectionId, connectionParameters) in parameters.groupBy { it.connectionId }) {
-            val credentials = takeCredentials(build, connectionId) ?: return false
+            val credentials = decodeCredentials(build, connectionId, encodedCredentials[connectionId]) ?: return false
             secretCount += resolveWithCredentials(build, connectionId, credentials, connectionParameters) ?: return false
         }
         build.buildLogger.message("Resolved ${parameters.size} parameter(s) from $secretCount secret(s)")
         return true
     }
 
-    private fun takeCredentials(build: AgentRunningBuild, connectionId: String): AwsSmCredentials? {
-        val parameterName = AwsSmConstants.credentialsParameterName(connectionId)
-        val encoded = build.sharedConfigParameters[parameterName]
+    private fun decodeCredentials(build: AgentRunningBuild, connectionId: String, encoded: String?): AwsSmCredentials? {
         if (encoded.isNullOrBlank()) {
             fail(build, "C_$connectionId", "The server did not provide credentials of AWS connection '$connectionId'")
             return null
         }
-
         return try {
-            AwsSmCredentials.decode(encoded).also { credentials ->
-                build.passwordReplacer.addPassword(credentials.secretAccessKey)
-                credentials.sessionToken?.let { build.passwordReplacer.addPassword(it) }
-            }
+            AwsSmCredentials.decode(encoded)
         } catch (e: IllegalArgumentException) {
             fail(build, "C_$connectionId", e.message ?: "Failed to decode AWS credentials")
             null
-        } finally {
-            // Credentials are only needed here, don't expose them to build steps
-            build.addSharedConfigParameter(parameterName, "")
         }
     }
 

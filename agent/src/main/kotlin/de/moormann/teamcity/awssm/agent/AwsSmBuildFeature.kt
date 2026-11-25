@@ -33,13 +33,16 @@ class AwsSmBuildFeature(
     }
 
     override fun buildStarted(runningBuild: AgentRunningBuild) {
+        // Before anything else, so no early exit leaves credentials in the build parameters
+        val credentials = resolver.takeAllCredentials(runningBuild)
+
         val parameters = extractParameters(runningBuild) ?: return
         if (parameters.isEmpty()) return
 
         val logger = runningBuild.buildLogger
         logger.activityStarted("AWS Secrets Manager", AwsSmConstants.PARAMETER_TYPE)
         try {
-            resolver.resolveParameters(runningBuild, parameters)
+            resolver.resolveParameters(runningBuild, parameters, credentials)
         } finally {
             logger.activityFinished("AWS Secrets Manager", AwsSmConstants.PARAMETER_TYPE)
         }
