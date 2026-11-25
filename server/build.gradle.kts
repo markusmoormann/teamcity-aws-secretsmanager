@@ -49,6 +49,14 @@ teamcity {
             }
         }
 
-        archiveName = "aws-secretsmanager-plugin.zip"
+        archiveName = "aws-secretsmanager-plugin-${project.version}.zip"
+
+        // JetBrains Marketplace upload (./gradlew :server:publishPlugin), used by .github/workflows/release.yml
+        publish {
+            token = (findProperty("jetbrains.token") as String?) ?: System.getenv("JETBRAINS_MARKETPLACE_TOKEN")
+            channels = listOf((findProperty("jetbrains.channel") as String?) ?: "default")
+            notes = (findProperty("jetbrains.notes") as String?)
+                ?: rootProject.file("build/release-notes.md").takeIf { it.isFile }?.readText()
+        }
     }
 }
